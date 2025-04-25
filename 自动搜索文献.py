@@ -3,13 +3,12 @@ import requests
 import time
 import os
 import datetime
+import html
 from bs4 import BeautifulSoup
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLabel, QLineEdit, QSpinBox, QPushButton, QTextEdit,
-                             QFileDialog, QProgressBar, QListWidget, QMessageBox, QSizePolicy, QDialog)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings
-
-import datetime
+                             QLabel, QLineEdit, QSpinBox, QPushButton, QTextEdit, QProgressBar,
+                               QListWidget, QMessageBox, QSizePolicy, QDialog,QScrollArea,QDialogButtonBox)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSettings, QTimer  # 添加了QTimer
 
 
 # API配置
@@ -213,6 +212,37 @@ class SearchWorker(QThread):
         self.search_complete.emit(filtered_articles)
         self.update_progress.emit(100)
 
+class WelcomeDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("欢迎使用")
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)  # 移除帮助按钮
+        layout = QVBoxLayout()
+        
+        # 创建提示信息标签
+        message = QLabel()
+        message.setText("""<b>请按以下步骤获取API密钥：</b>
+        <ol>
+            <li>前往<a href="https://cloud.siliconflow.cn/i/XOLuRqkK">硅基流动官网</a>注册账号</li>
+            <li>登录后进入控制台，点击【API密钥】菜单</li>
+            <li>创建新的API密钥并复制</li>
+            <li>返回本程序粘贴到API Token输入框即可使用</li><br><br>
+            <strong>分享该程序时，建议点击清空配置，防止自己的api泄露</strong>
+        </ol>""")
+        message.setOpenExternalLinks(True)  # 允许打开外部链接
+        message.setTextFormat(Qt.RichText)
+        message.setWordWrap(True)
+        
+        # 创建按钮
+        close_btn = QPushButton("知道了")
+        close_btn.clicked.connect(self.accept)
+        
+        # 布局设置
+        layout.addWidget(message)
+        layout.addWidget(close_btn)
+        self.setLayout(layout)
+        self.resize(400, 200)
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -221,6 +251,13 @@ class MainWindow(QMainWindow):
         self.search_thread = None
         self.init_ui()
         self.load_settings()
+        
+        # 在窗口初始化完成后显示欢迎弹窗
+        QTimer.singleShot(100, self.show_welcome_dialog)  # 延迟100ms确保主窗口先显示
+
+    def show_welcome_dialog(self):
+        dialog = WelcomeDialog(self)
+        dialog.exec_()
 
     def init_ui(self):
         main_widget = QWidget()
@@ -351,29 +388,60 @@ class MainWindow(QMainWindow):
         self.search_thread.progress_stage.connect(self.stage_label.setText)
         self.search_thread.start()
 
+
     def show_results(self, results):
         dialog = QDialog(self)
-        dialog.setWindowTitle("搜索完成")
-        dialog.resize(800, 600)
-        
-        layout = QVBoxLayout()
-        text_edit = QTextEdit()
-        text_edit.setReadOnly(True)
-        
-        result_text = f"找到 {len(results)} 篇相关文献：\n\n"
-        for idx, article in enumerate(results[:10], 1):
-            result_text += f"{idx}. [{article['score']:.1f}分] {article['title']}\n"
-            result_text += f"链接：{article['link']}\n\n"
-        
-        text_edit.setText(result_text)
-        layout.addWidget(text_edit)
-        
-        close_btn = QPushButton("关闭")
-        close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn)
-        
-        dialog.setLayout(layout)
+        dialog.setWindowTitle("搜索结果")
+        dialog.setMinimumSize(600, 400)
+
+        # 主布局
+        layout = QVBoxLayout(dialog)
+
+        # 滚动区域
+        scroll = QScrollArea()
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+
+        # 显示结果
+        for idx, item in enumerate(results[:10], 1):
+            # 转义HTML字符
+            title = html.escape(item['title'])
+            link = html.escape(item['link'])
+            summary = html.escape(item['summary'])
+
+            # 单个结果条目
+            entry = QLabel()
+            entry.setTextFormat(Qt.RichText)
+            entry.setOpenExternalLinks(True)
+            entry.setText(
+                f"{idx}. [{item['score']:.1f}分]<br/>"
+                f"<a href='{link}'>{title}</a><br/>"
+                f"摘要：{summary}<br/>"
+                f"链接：<a href='{link}'>{link}</a>"
+            )
+            content_layout.addWidget(entry)
+
+        scroll.setWidget(content)
+        layout.addWidget(scroll)
+
+        # 底部按钮
+        btn_box = QDialogButtonBox()
+        copy_btn = QPushButton("复制")
+        copy_btn.clicked.connect(lambda: self.copy_results(results))
+        btn_box.addButton(copy_btn, QDialogButtonBox.ActionRole)
+        btn_box.addButton(QDialogButtonBox.Close)
+        btn_box.rejected.connect(dialog.reject)
+
+        layout.addWidget(btn_box)
         dialog.exec_()
+
+    def copy_results(self, results):
+        text = ""
+        for idx, item in enumerate(results[:10], 1):
+            text += f"{idx}. [{item['score']:.1f}分] {item['title']}\n"
+            text += f"摘要：{item['summary']}\n"
+            text += f"链接：{item['link']}\n\n"
+        QApplication.clipboard().setText(text.strip())
 
     def stop_search(self):
         if self.search_thread and self.search_thread.isRunning():
